@@ -1,0 +1,14 @@
+{
+  "name": "rafalmasiarek/real-ip-resolver",
+  "description": "Simple and extensible real IP resolver for PHP behind proxies and load balancers.",
+  "type": "library",
+  "autoload": {
+    "psr-4": {
+      "rafalmasiarek\\Http\\RealIpResolver\\": "src/"
+    }
+  },
+  "require": {
+    "php": ">=7.4"
+  },
+  "license": "MIT"
+}
