@@ -1,6 +1,6 @@
 <?php
 
-namespace rafalmasiarek\Http\RealIpResolver;
+namespace rafalmasiarek\RealIpResolver;
 
 class TrustedProxy implements TrustedProxyInterface
 {

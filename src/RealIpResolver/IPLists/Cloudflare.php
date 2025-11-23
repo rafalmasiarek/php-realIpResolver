@@ -1,12 +1,12 @@
 <?php
 
-namespace rafalmasiarek\Http\RealIpResolver\IPLists;
+namespace rafalmasiarek\RealIpResolver\IPLists;
 
 class Cloudflare implements IpListInterface
 {
     public static function get(): array
     {
-        $file = __DIR__ . '/../../data/cloudflare.txt';
+        $file = __DIR__ . '/../data/cloudflare.txt';
         if (!file_exists($file)) {
             return [];
         }

@@ -1,6 +1,6 @@
 <?php
 
-namespace rafalmasiarek\Http\RealIpResolver\IPLists;
+namespace rafalmasiarek\RealIpResolver\IPLists;
 
 class Localhost
 {
