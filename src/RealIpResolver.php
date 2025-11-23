@@ -2,6 +2,8 @@
 
 namespace rafalmasiarek;
 
+use rafalmasiarek\RealIpResolver\TrustedProxy;
+
 class RealIpResolver
 {
     private ?TrustedProxy $trustedProxy;
@@ -21,22 +23,29 @@ class RealIpResolver
     }
 
     /**
-     * Get the real client IP address.
+     * Get the best-effort real client IP address based on REMOTE_ADDR,
+     * trusted proxy headers and X-Forwarded-For.
      */
     public function getIp(): string
     {
-        $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+        $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '';
 
         $isTrusted = $this->trustedProxy?->isTrusted($remoteAddr) ?? false;
 
-        if ($isTrusted) {
+        if ($isTrusted && $this->trustedProxy !== null) {
             // 1. Cloudflare-specific header
-            if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
+            if (
+                !empty($_SERVER['HTTP_CF_CONNECTING_IP']) &&
+                $this->isValidPublicIp($_SERVER['HTTP_CF_CONNECTING_IP'])
+            ) {
                 return $_SERVER['HTTP_CF_CONNECTING_IP'];
             }
 
             // 2. Nginx-style header
-            if (!empty($_SERVER['HTTP_X_REAL_IP'])) {
+            if (
+                !empty($_SERVER['HTTP_X_REAL_IP']) &&
+                $this->isValidPublicIp($_SERVER['HTTP_X_REAL_IP'])
+            ) {
                 return $_SERVER['HTTP_X_REAL_IP'];
             }
 
@@ -44,7 +53,11 @@ class RealIpResolver
             if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
                 $ipList = array_map('trim', explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']));
                 foreach (array_reverse($ipList) as $ip) {
-                    if (!$this->trustedProxy->isTrusted($ip)) {
+                    // we only accept the first non-trusted AND valid IP
+                    if (
+                        !$this->trustedProxy->isTrusted($ip) &&
+                        $this->isValidPublicIp($ip)
+                    ) {
                         return $ip;
                     }
                 }
@@ -73,12 +86,12 @@ class RealIpResolver
      */
     private function isValidPublicIp(string $ip): bool
     {
-        $flags = FILTER_VALIDATE_IP;
+        $options = [];
 
         if ($this->filterPrivateReserved) {
-            $flags |= FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE;
+            $options['flags'] = FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE;
         }
 
-        return filter_var($ip, FILTER_VALIDATE_IP, $flags) !== false;
+        return filter_var($ip, FILTER_VALIDATE_IP, $options) !== false;
     }
 }

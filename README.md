@@ -26,18 +26,17 @@ echo "Real IP: " . $realIp;
 You can specify trusted proxy IP ranges using predefined providers:
 
 ```php
-use rafalmasiarek\Http\RealIpResolver\TrustedProxy;
-use rafalmasiarek\Http\RealIpResolver\RealIpResolver;
-use rafalmasiarek\Http\RealIpResolver\IPLists\Cloudflare;
-use rafalmasiarek\Http\RealIpResolver\IPLists\Localhost;
+use rafalmasiarek\RealIpResolver;
+use rafalmasiarek\RealIpResolver\TrustedProxy;
+use rafalmasiarek\RealIpResolver\IPLists\Cloudflare;
+use rafalmasiarek\RealIpResolver\IPLists\Localhost;
 
 $trustedIps = array_merge(
     Localhost::get(),
     Cloudflare::get()
 );
 
-$trustedProxy = new TrustedProxy($trustedIps);
-$resolver = new RealIpResolver($trustedProxy);
+$trustedProxy = new TrustedProxy($trustedIps);$resolver = new RealIpResolver($trustedProxy);
 
 $realIp = $resolver->getIp();
 echo "Real IP: " . $realIp;
@@ -45,10 +44,10 @@ echo "Real IP: " . $realIp;
 
 ## Creating a Custom IP List
 
-To define your own trusted proxy list, simply implement the `IpListInterface`:
+To define your own trusted proxy list, implement the `IpListInterface`:
 
 ```php
-namespace rafalmasiarek\Http\RealIpResolver\IPLists;
+namespace rafalmasiarek\RealIpResolver\IPLists;
 
 class MyCustomProxy implements IpListInterface
 {
@@ -63,16 +62,56 @@ class MyCustomProxy implements IpListInterface
 }
 ```
 
-Then use it:
+Using it:
 
 ```php
-use rafalmasiarek\Http\RealIpResolver\IPLists\MyCustomProxy;
+use rafalmasiarek\RealIpResolver;
+use rafalmasiarek\RealIpResolver\TrustedProxy;
+use rafalmasiarek\RealIpResolver\IPLists\MyCustomProxy;
 
 $trustedIps = MyCustomProxy::get();
 $trustedProxy = new TrustedProxy($trustedIps);
 $resolver = new RealIpResolver($trustedProxy);
 ```
 
+## Namespace Change in 1.2.0
+
+Starting from version **1.2.0**, the library uses a cleaner and flatter namespace structure.
+
+### What changed
+
+Old namespace (before 1.2.0):
+
+```
+rafalmasiarek\Http\RealIpResolver\
+```
+
+New namespace (1.2.0 and later):
+
+```
+rafalmasiarek\RealIpResolver\
+```
+
+### Updated imports
+
+Before:
+
+```php
+use rafalmasiarek\Http\RealIpResolver\RealIpResolver;
+```
+
+After:
+
+```php
+use rafalmasiarek\RealIpResolver;
+use rafalmasiarek\RealIpResolver\TrustedProxy;
+use rafalmasiarek\RealIpResolver\IPLists\Cloudflare;
+use rafalmasiarek\RealIpResolver\IPLists\Localhost;
+```
+
+All users should update their imports accordingly.
+
 ## License
 
 MIT
+
