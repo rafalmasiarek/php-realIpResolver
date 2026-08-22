@@ -5,17 +5,18 @@ declare(strict_types=1);
 namespace rafalmasiarek\RealIpResolver\IPLists;
 
 /**
- * Common interface for IP list providers used by TrustedProxy.
+ * Contract for IP address list providers used as trusted proxy sources.
  *
- * Implementations should return a list of IPs/CIDR ranges as strings.
+ * Implementations may return plain IP addresses or CIDR notation ranges.
+ *
+ * @package rafalmasiarek\RealIpResolver\IPLists
  */
 interface IpListInterface
 {
     /**
-     * Return list of IPs/CIDRs for this provider.
+     * Return the list of IP addresses or CIDR ranges.
      *
-     * @return string[] Array of IP addresses or CIDR blocks.
+     * @return string[] Array of IP addresses or CIDR blocks (e.g. '173.245.48.0/20').
      */
     public static function get(): array;
 }
-

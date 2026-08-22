@@ -1,6 +1,12 @@
 # RealIpResolver
 
-A lightweight PHP library to resolve the real client IP address, with optional support for trusted proxy lists like Cloudflare, AWS, or localhost.
+A lightweight PHP library to resolve the **real client IP address** behind proxies and load balancers, hardened against header spoofing.
+
+## Security model
+
+- When **no trusted proxy is configured**, or when **REMOTE_ADDR is not in the trusted list**, all forwarding headers (`X-Forwarded-For`, `CF-Connecting-IP`, etc.) are ignored entirely — REMOTE_ADDR is returned directly. This prevents any header-based IP spoofing.
+- Forwarding headers are trusted **only** when REMOTE_ADDR is a verified trusted proxy.
+- `X-Forwarded-For` is traversed **right-to-left** to skip trusted intermediaries and return the first real client IP.
 
 ## Installation
 
@@ -8,22 +14,24 @@ A lightweight PHP library to resolve the real client IP address, with optional s
 composer require rafalmasiarek/real-ip-resolver
 ```
 
-## Basic Usage (no trusted proxy)
+## Requirements
 
-If you're not behind any proxies or load balancers, you can use the resolver directly:
+PHP 8.1 or later.
+
+## Basic usage
+
+Without any proxy, REMOTE_ADDR is returned directly:
 
 ```php
-use rafalmasiarek\Http\RealIpResolver\RealIpResolver;
+use rafalmasiarek\RealIpResolver;
 
 $resolver = new RealIpResolver();
-$realIp = $resolver->getIp();
-
-echo "Real IP: " . $realIp;
+echo $resolver->getIp();
 ```
 
-## Advanced Usage (with trusted proxies)
+## With trusted proxies
 
-You can specify trusted proxy IP ranges using predefined providers:
+Pass a `TrustedProxy` instance populated with IP addresses or CIDR ranges:
 
 ```php
 use rafalmasiarek\RealIpResolver;
@@ -31,87 +39,126 @@ use rafalmasiarek\RealIpResolver\TrustedProxy;
 use rafalmasiarek\RealIpResolver\IPLists\Cloudflare;
 use rafalmasiarek\RealIpResolver\IPLists\Localhost;
 
-$trustedIps = array_merge(
+$trustedProxy = new TrustedProxy(array_merge(
     Localhost::get(),
-    Cloudflare::get()
-);
+    Cloudflare::get(),
+));
 
-$trustedProxy = new TrustedProxy($trustedIps);$resolver = new RealIpResolver($trustedProxy);
-
-$realIp = $resolver->getIp();
-echo "Real IP: " . $realIp;
+$resolver = new RealIpResolver($trustedProxy);
+echo $resolver->getIp();
 ```
 
-## Creating a Custom IP List
+`TrustedProxy` accepts exact IPs and CIDR notation for both IPv4 (`173.245.48.0/20`) and IPv6 (`2400:cb00::/32`).
 
-To define your own trusted proxy list, implement the `IpListInterface`:
+## Header priority
+
+When REMOTE_ADDR is trusted, headers are evaluated in this order:
+
+1. `CF-Connecting-IP` — set by Cloudflare
+2. `Forwarded: for=` — RFC 7239
+3. `X-Real-IP` — set by Nginx
+4. `X-Forwarded-For` — right-to-left, first non-proxy public IP
+
+## Built-in IP list providers
+
+### Cloudflare
 
 ```php
-namespace rafalmasiarek\RealIpResolver\IPLists;
+use rafalmasiarek\RealIpResolver\IPLists\Cloudflare;
 
-class MyCustomProxy implements IpListInterface
+// Returns CIDR ranges from the local cache file (src/RealIpResolver/data/cloudflare.txt)
+$ips = Cloudflare::get();
+
+// Download fresh ranges from Cloudflare's official endpoints and update the local file
+Cloudflare::updateList();
+```
+
+A GitHub Actions workflow (`update-cloudflare.yml`) is included to refresh the list automatically on the 1st of each month.
+
+### Localhost
+
+```php
+use rafalmasiarek\RealIpResolver\IPLists\Localhost;
+
+// Returns ['127.0.0.1', '::1']
+$ips = Localhost::get();
+```
+
+### Nginx
+
+For a local Nginx reverse proxy with deployment-specific IPs:
+
+```php
+use rafalmasiarek\RealIpResolver\IPLists\Nginx;
+
+Nginx::import(['10.0.0.1', '10.0.0.2']);
+$ips = Nginx::get();
+```
+
+## Custom IP list
+
+Implement `IpListInterface` to define your own provider:
+
+```php
+use rafalmasiarek\RealIpResolver\IPLists\IpListInterface;
+
+class MyProxy implements IpListInterface
 {
     public static function get(): array
     {
-        return [
-            '203.0.113.5',
-            '203.0.113.6',
-            '2001:db8::abcd:1234',
-        ];
+        return ['203.0.113.0/24', '2001:db8::/32'];
     }
 }
 ```
 
-Using it:
+## PSR-15 middleware
+
+Install the optional dependency:
+
+```
+composer require psr/http-server-middleware
+```
+
+Then register the middleware:
 
 ```php
 use rafalmasiarek\RealIpResolver;
 use rafalmasiarek\RealIpResolver\TrustedProxy;
-use rafalmasiarek\RealIpResolver\IPLists\MyCustomProxy;
+use rafalmasiarek\RealIpResolver\Middleware\RealIpResolverMiddleware;
 
-$trustedIps = MyCustomProxy::get();
-$trustedProxy = new TrustedProxy($trustedIps);
-$resolver = new RealIpResolver($trustedProxy);
+$resolver = new RealIpResolver(new TrustedProxy(Cloudflare::get()));
+$app->add(new RealIpResolverMiddleware($resolver));
+
+// In a route handler:
+$realIp = $request->getAttribute('real_ip');
 ```
 
-## Namespace Change in 1.2.0
+## Options
 
-Starting from version **1.2.0**, the library uses a cleaner and flatter namespace structure.
+```php
+// Allow private and reserved IP ranges (e.g. for internal networks)
+$resolver->disablePrivateReservedFilter();
 
-### What changed
-
-Old namespace (before 1.2.0):
-
-```
-rafalmasiarek\Http\RealIpResolver\
+// Skip RFC 7239 Forwarded header parsing
+$resolver->disableRFC7239();
 ```
 
-New namespace (1.2.0 and later):
+## Namespace change in 1.2.0
 
-```
-rafalmasiarek\RealIpResolver\
-```
-
-### Updated imports
-
-Before:
+The namespace was flattened in 1.2.0. Old imports:
 
 ```php
 use rafalmasiarek\Http\RealIpResolver\RealIpResolver;
 ```
 
-After:
+New imports:
 
 ```php
 use rafalmasiarek\RealIpResolver;
 use rafalmasiarek\RealIpResolver\TrustedProxy;
 use rafalmasiarek\RealIpResolver\IPLists\Cloudflare;
-use rafalmasiarek\RealIpResolver\IPLists\Localhost;
 ```
-
-All users should update their imports accordingly.
 
 ## License
 
 MIT
-
