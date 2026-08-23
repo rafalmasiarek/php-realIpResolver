@@ -6,7 +6,8 @@ A lightweight PHP library to resolve the **real client IP address** behind proxi
 
 - When **no trusted proxy is configured**, or when **REMOTE_ADDR is not in the trusted list**, all forwarding headers (`X-Forwarded-For`, `CF-Connecting-IP`, etc.) are ignored entirely — REMOTE_ADDR is returned directly. This prevents any header-based IP spoofing.
 - Forwarding headers are trusted **only** when REMOTE_ADDR is a verified trusted proxy.
-- `X-Forwarded-For` is traversed **right-to-left** to skip trusted intermediaries and return the first real client IP.
+- `X-Forwarded-For` and `Forwarded` (RFC 7239) are traversed **right-to-left** to skip trusted intermediaries and return the first real client IP.
+- `CF-Connecting-IP` is **disabled by default** — it must be enabled explicitly via `enableCloudflareHeader()`.
 
 ## Installation
 
@@ -54,10 +55,27 @@ echo $resolver->getIp();
 
 When REMOTE_ADDR is trusted, headers are evaluated in this order:
 
-1. `CF-Connecting-IP` — set by Cloudflare
-2. `Forwarded: for=` — RFC 7239
-3. `X-Real-IP` — set by Nginx
+1. `CF-Connecting-IP` — Cloudflare, **opt-in only** via `enableCloudflareHeader()`
+2. `Forwarded: for=` — RFC 7239, right-to-left chain traversal
+3. `X-Real-IP` — Nginx
 4. `X-Forwarded-For` — right-to-left, first non-proxy public IP
+
+## Cloudflare setup
+
+`CF-Connecting-IP` must be explicitly enabled. It is safe to enable when your trusted proxy list consists exclusively of Cloudflare edge IPs, because REMOTE_ADDR must already match a Cloudflare range for headers to be read at all:
+
+```php
+use rafalmasiarek\RealIpResolver;
+use rafalmasiarek\RealIpResolver\TrustedProxy;
+use rafalmasiarek\RealIpResolver\IPLists\Cloudflare;
+
+$resolver = new RealIpResolver(new TrustedProxy(Cloudflare::get()));
+$resolver->enableCloudflareHeader();
+
+echo $resolver->getIp();
+```
+
+If your trusted proxy list is a **mix** (e.g. Cloudflare + a local Nginx), leave `CF-Connecting-IP` disabled — Nginx does not set it, and a client connecting directly to Nginx could spoof it if Nginx does not strip the header.
 
 ## Built-in IP list providers
 
@@ -124,9 +142,11 @@ Then register the middleware:
 ```php
 use rafalmasiarek\RealIpResolver;
 use rafalmasiarek\RealIpResolver\TrustedProxy;
+use rafalmasiarek\RealIpResolver\IPLists\Cloudflare;
 use rafalmasiarek\RealIpResolver\Middleware\RealIpResolverMiddleware;
 
 $resolver = new RealIpResolver(new TrustedProxy(Cloudflare::get()));
+$resolver->enableCloudflareHeader();
 $app->add(new RealIpResolverMiddleware($resolver));
 
 // In a route handler:
@@ -136,7 +156,10 @@ $realIp = $request->getAttribute('real_ip');
 ## Options
 
 ```php
-// Allow private and reserved IP ranges (e.g. for internal networks)
+// Enable CF-Connecting-IP (safe when proxy list is exclusively Cloudflare IPs)
+$resolver->enableCloudflareHeader();
+
+// Allow private and reserved IP ranges (e.g. for internal networks or tests)
 $resolver->disablePrivateReservedFilter();
 
 // Skip RFC 7239 Forwarded header parsing
