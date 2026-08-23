@@ -7,17 +7,16 @@ A lightweight PHP library to resolve the **real client IP address** behind proxi
 The fundamental rule: a forwarding header is trusted only when you know that the proxy delivering the request both **sets** and **sanitizes** that header.
 
 - When **no trusted proxy is configured**, or when **REMOTE_ADDR is not in the trusted list**, all forwarding headers are ignored — REMOTE_ADDR is returned directly.
-- `X-Forwarded-For` is always evaluated when REMOTE_ADDR is trusted (using right-to-left chain traversal).
-- All other headers — `CF-Connecting-IP`, `Forwarded`, `X-Real-IP` — are **disabled by default** and require an explicit opt-in call.
+- All forwarding headers — including `X-Forwarded-For` — are **disabled by default** and require an explicit opt-in call.
 
 Default behaviour per header:
 
-| Header             | Default   | Enable via                |
-|--------------------|-----------|---------------------------|
-| `X-Forwarded-For`  | on        | (always evaluated)        |
-| `CF-Connecting-IP` | off       | `enableCloudflareHeader()` |
-| `Forwarded`        | off       | `enableRFC7239()`         |
-| `X-Real-IP`        | off       | `enableXRealIpHeader()`   |
+| Header             | Default   | Enable via                        |
+|--------------------|-----------|-----------------------------------|
+| `X-Forwarded-For`  | off       | `enableXForwardedForHeader()`     |
+| `CF-Connecting-IP` | off       | `enableCloudflareHeader()`        |
+| `Forwarded`        | off       | `enableRFC7239()`                 |
+| `X-Real-IP`        | off       | `enableXRealIpHeader()`           |
 
 ## Installation
 
@@ -61,6 +60,19 @@ use rafalmasiarek\RealIpResolver;
 use rafalmasiarek\RealIpResolver\TrustedProxy;
 use rafalmasiarek\RealIpResolver\IPLists\Nginx;
 
+// Nginx setup with proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for
+Nginx::import(['10.0.0.1']);
+$resolver = new RealIpResolver(new TrustedProxy(Nginx::get()));
+$resolver->enableXForwardedForHeader();
+
+echo $resolver->getIp();
+```
+
+```php
+use rafalmasiarek\RealIpResolver;
+use rafalmasiarek\RealIpResolver\TrustedProxy;
+use rafalmasiarek\RealIpResolver\IPLists\Nginx;
+
 // Nginx setup with proxy_set_header X-Real-IP $remote_addr
 Nginx::import(['10.0.0.1']);
 $resolver = new RealIpResolver(new TrustedProxy(Nginx::get()));
@@ -78,7 +90,7 @@ When REMOTE_ADDR is trusted, headers are evaluated in this order (first match wi
 1. `CF-Connecting-IP` — opt-in via `enableCloudflareHeader()`
 2. `Forwarded: for=` — opt-in via `enableRFC7239()`, right-to-left chain traversal
 3. `X-Real-IP` — opt-in via `enableXRealIpHeader()`
-4. `X-Forwarded-For` — always on, right-to-left chain traversal
+4. `X-Forwarded-For` — opt-in via `enableXForwardedForHeader()`, right-to-left chain traversal
 
 ## When is each opt-in safe?
 
@@ -88,7 +100,9 @@ When REMOTE_ADDR is trusted, headers are evaluated in this order (first match wi
 
 **`enableXRealIpHeader()`** — safe when Nginx is configured with `proxy_set_header X-Real-IP $remote_addr` and strips any client-supplied `X-Real-IP` header.
 
-In all cases: if you are unsure whether your proxy sanitizes a header, leave it disabled and rely on `X-Forwarded-For` instead.
+**`enableXForwardedForHeader()`** — safe when the trusted proxy appends the client IP to the chain (`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` in Nginx) and your infrastructure strips any client-supplied `X-Forwarded-For` values before they reach PHP.
+
+In all cases: enable only headers that your proxy is known to set or sanitize. When in doubt, leave the header disabled.
 
 ## Built-in IP list providers
 
@@ -169,6 +183,9 @@ $realIp = $request->getAttribute('real_ip');
 ## All options
 
 ```php
+// Enable X-Forwarded-For header (right-to-left chain traversal)
+$resolver->enableXForwardedForHeader();
+
 // Enable CF-Connecting-IP (Cloudflare)
 $resolver->enableCloudflareHeader();
 

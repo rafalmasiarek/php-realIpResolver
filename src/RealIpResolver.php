@@ -13,18 +13,19 @@ use rafalmasiarek\RealIpResolver\TrustedProxyInterface;
  * all forwarding headers are ignored and REMOTE_ADDR is returned directly.
  *
  * When REMOTE_ADDR belongs to a trusted proxy, additional headers can be trusted
- * via explicit opt-in. X-Forwarded-For is always evaluated when trusted; all other
- * headers are disabled by default and must be enabled individually:
+ * via explicit opt-in. All forwarding headers are disabled by default and must
+ * be enabled individually:
  *
- *   enableCloudflareHeader() → CF-Connecting-IP
- *   enableRFC7239()          → Forwarded: for= (RFC 7239), right-to-left chain
- *   enableXRealIpHeader()    → X-Real-IP
+ *   enableCloudflareHeader()    → CF-Connecting-IP
+ *   enableRFC7239()             → Forwarded: for= (RFC 7239), right-to-left chain
+ *   enableXRealIpHeader()       → X-Real-IP
+ *   enableXForwardedForHeader() → X-Forwarded-For, right-to-left chain
  *
  * Headers are evaluated in priority order:
  *   1. CF-Connecting-IP     (opt-in)
  *   2. Forwarded: for=      (opt-in, right-to-left)
  *   3. X-Real-IP            (opt-in)
- *   4. X-Forwarded-For      (always on, right-to-left)
+ *   4. X-Forwarded-For      (opt-in, right-to-left)
  *
  * Enabling a header is safe only when the trusted proxy is known to set or
  * sanitize that header — the library cannot enforce this at the network level.
@@ -67,6 +68,13 @@ class RealIpResolver
      * @var bool
      */
     private bool $trustXRealIpHeader = false;
+
+    /**
+     * Whether to trust the X-Forwarded-For header.
+     *
+     * @var bool
+     */
+    private bool $trustXForwardedForHeader = false;
 
     /**
      * @param TrustedProxyInterface|null $trustedProxy Optional trusted proxy handler.
@@ -125,6 +133,20 @@ class RealIpResolver
     }
 
     /**
+     * Enable trusting the X-Forwarded-For header.
+     *
+     * Safe only when the trusted proxy appends the client IP to the existing chain
+     * and the infrastructure strips any client-supplied X-Forwarded-For values
+     * before they reach PHP.
+     *
+     * @return void
+     */
+    public function enableXForwardedForHeader(): void
+    {
+        $this->trustXForwardedForHeader = true;
+    }
+
+    /**
      * Return the real client IP address.
      *
      * Returns REMOTE_ADDR immediately when the direct peer is not a trusted proxy,
@@ -164,8 +186,8 @@ class RealIpResolver
             }
         }
 
-        // 4. X-Forwarded-For — always on, right-to-left, skip trusted proxies
-        if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+        // 4. X-Forwarded-For — opt-in, right-to-left, skip trusted proxies
+        if ($this->trustXForwardedForHeader && !empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
             $chain = array_map('trim', explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']));
             foreach (array_reverse($chain) as $ip) {
                 if (!$this->trustedProxy->isTrusted($ip) && $this->isValidIp($ip)) {
