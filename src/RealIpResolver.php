@@ -214,6 +214,12 @@ class RealIpResolver
             if ($end === false) {
                 return null;
             }
+
+            $suffix = substr($value, $end + 1);
+            if ($suffix !== '' && !preg_match('/^:\d+$/', $suffix)) {
+                return null;
+            }
+
             return substr($value, 1, $end - 1);
         }
 

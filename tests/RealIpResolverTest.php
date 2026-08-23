@@ -278,6 +278,20 @@ class RealIpResolverTest extends TestCase
     }
 
     /**
+     * RFC 7239 IPv6 node with invalid suffix is rejected by the parser.
+     */
+    public function testRfc7239IPv6InvalidSuffixRejected(): void
+    {
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
+        // '[::1]garbage' is not a valid RFC 7239 node — suffix after ] is not :port
+        $_SERVER['HTTP_FORWARDED'] = 'for="[2606:4700::1]garbage"';
+        $_SERVER['HTTP_X_REAL_IP'] = '8.8.8.8';
+
+        // Malformed Forwarded node must be discarded; resolver falls through to X-Real-IP
+        $this->assertSame('8.8.8.8', (new RealIpResolver(new TrustedProxy(['192.168.1.1'])))->getIp());
+    }
+
+    /**
      * Disabling RFC 7239 causes the resolver to skip the Forwarded header.
      */
     public function testDisableRfc7239(): void
