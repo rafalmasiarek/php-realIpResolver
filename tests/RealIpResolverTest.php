@@ -15,8 +15,8 @@ use rafalmasiarek\RealIpResolver\IPLists\Cloudflare;
  * Test IPs used:
  *   Proxy / trusted  → private ranges (192.168.x.x, 10.x.x.x) or Cloudflare CIDR IPs.
  *                      No public filter is applied to proxy addresses.
- *   Client (in headers) → globally routable public IPs (1.1.1.1, 8.8.8.8, 9.9.9.9…).
- *                         Must pass FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE.
+ *   Client (headers) → globally routable public IPs (1.1.1.1, 8.8.8.8, 9.9.9.9…).
+ *                      Must pass FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE.
  *
  * @package Tests
  */
@@ -81,18 +81,22 @@ class RealIpResolverTest extends TestCase
         $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
         $_SERVER['HTTP_X_FORWARDED_FOR'] = '1.1.1.1';
 
-        $this->assertSame('1.1.1.1', (new RealIpResolver(new TrustedProxy(['192.168.1.1'])))->getIp());
+        $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
+        $resolver->enableXForwardedForHeader();
+        $this->assertSame('1.1.1.1', $resolver->getIp());
     }
 
     /**
-     * IPv4 CIDR match allows trusted resolution via CF-Connecting-IP.
+     * IPv4 CIDR match allows trusted resolution via XFF.
      */
     public function testCidrMatchIPv4(): void
     {
         $_SERVER['REMOTE_ADDR'] = '173.245.48.10';
-        $_SERVER['HTTP_CF_CONNECTING_IP'] = '1.1.1.1';
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = '1.1.1.1';
 
-        $this->assertSame('1.1.1.1', (new RealIpResolver(new TrustedProxy(['173.245.48.0/20'])))->getIp());
+        $resolver = new RealIpResolver(new TrustedProxy(['173.245.48.0/20']));
+        $resolver->enableXForwardedForHeader();
+        $this->assertSame('1.1.1.1', $resolver->getIp());
     }
 
     /**
@@ -102,23 +106,25 @@ class RealIpResolverTest extends TestCase
     {
         $proxy = new TrustedProxy(['173.245.48.0/20']);
 
-        $this->assertTrue($proxy->isTrusted('173.245.48.0'));    // network address
-        $this->assertTrue($proxy->isTrusted('173.245.48.1'));    // first host
-        $this->assertTrue($proxy->isTrusted('173.245.63.254')); // last host
-        $this->assertTrue($proxy->isTrusted('173.245.63.255')); // broadcast
-        $this->assertFalse($proxy->isTrusted('173.245.64.0'));  // just outside
-        $this->assertFalse($proxy->isTrusted('173.245.47.255')); // just before
+        $this->assertTrue($proxy->isTrusted('173.245.48.0'));
+        $this->assertTrue($proxy->isTrusted('173.245.48.1'));
+        $this->assertTrue($proxy->isTrusted('173.245.63.254'));
+        $this->assertTrue($proxy->isTrusted('173.245.63.255'));
+        $this->assertFalse($proxy->isTrusted('173.245.64.0'));
+        $this->assertFalse($proxy->isTrusted('173.245.47.255'));
     }
 
     /**
-     * IPv6 CIDR match allows trusted resolution via CF-Connecting-IP.
+     * IPv6 CIDR match allows trusted resolution via XFF.
      */
     public function testCidrMatchIPv6(): void
     {
         $_SERVER['REMOTE_ADDR'] = '2400:cb00::1';
-        $_SERVER['HTTP_CF_CONNECTING_IP'] = '1.1.1.1';
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = '1.1.1.1';
 
-        $this->assertSame('1.1.1.1', (new RealIpResolver(new TrustedProxy(['2400:cb00::/32'])))->getIp());
+        $resolver = new RealIpResolver(new TrustedProxy(['2400:cb00::/32']));
+        $resolver->enableXForwardedForHeader();
+        $this->assertSame('1.1.1.1', $resolver->getIp());
     }
 
     /**
@@ -144,30 +150,84 @@ class RealIpResolverTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // Header priority
+    // CF-Connecting-IP — opt-in
     // -------------------------------------------------------------------------
 
     /**
-     * CF-Connecting-IP takes priority over X-Forwarded-For.
+     * CF-Connecting-IP is ignored by default; resolver falls through to XFF when enabled.
      */
-    public function testCfConnectingIpPriority(): void
+    public function testCfConnectingIpDisabledByDefault(): void
     {
         $_SERVER['REMOTE_ADDR'] = '173.245.48.1';
         $_SERVER['HTTP_CF_CONNECTING_IP'] = '1.1.1.1';
         $_SERVER['HTTP_X_FORWARDED_FOR'] = '8.8.8.8';
 
-        $this->assertSame('1.1.1.1', (new RealIpResolver(new TrustedProxy(['173.245.48.0/20'])))->getIp());
+        $resolver = new RealIpResolver(new TrustedProxy(['173.245.48.0/20']));
+        $resolver->enableXForwardedForHeader();
+        // CF-Connecting-IP disabled → falls through to XFF
+        $this->assertSame('8.8.8.8', $resolver->getIp());
     }
 
     /**
-     * X-Real-IP is used when CF-Connecting-IP is absent.
+     * CF-Connecting-IP takes priority over other headers when explicitly enabled.
      */
-    public function testXRealIpFallback(): void
+    public function testCfConnectingIpWhenEnabled(): void
+    {
+        $_SERVER['REMOTE_ADDR'] = '173.245.48.1';
+        $_SERVER['HTTP_CF_CONNECTING_IP'] = '1.1.1.1';
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = '9.9.9.9';
+
+        $resolver = new RealIpResolver(new TrustedProxy(['173.245.48.0/20']));
+        $resolver->enableCloudflareHeader();
+        $this->assertSame('1.1.1.1', $resolver->getIp());
+    }
+
+    // -------------------------------------------------------------------------
+    // X-Real-IP — opt-in
+    // -------------------------------------------------------------------------
+
+    /**
+     * X-Real-IP is ignored by default; resolver falls through to XFF when enabled.
+     */
+    public function testXRealIpDisabledByDefault(): void
+    {
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
+        $_SERVER['HTTP_X_REAL_IP'] = '1.1.1.1';
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = '8.8.8.8';
+
+        $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
+        $resolver->enableXForwardedForHeader();
+        // X-Real-IP disabled → falls through to XFF
+        $this->assertSame('8.8.8.8', $resolver->getIp());
+    }
+
+    /**
+     * X-Real-IP is used when explicitly enabled.
+     */
+    public function testXRealIpWhenEnabled(): void
     {
         $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
         $_SERVER['HTTP_X_REAL_IP'] = '8.8.8.8';
 
-        $this->assertSame('8.8.8.8', (new RealIpResolver(new TrustedProxy(['192.168.1.1'])))->getIp());
+        $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
+        $resolver->enableXRealIpHeader();
+        $this->assertSame('8.8.8.8', $resolver->getIp());
+    }
+
+    // -------------------------------------------------------------------------
+    // X-Forwarded-For — opt-in
+    // -------------------------------------------------------------------------
+
+    /**
+     * XFF is ignored by default even when REMOTE_ADDR is trusted.
+     */
+    public function testXffDisabledByDefault(): void
+    {
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = '1.1.1.1';
+
+        // XFF disabled by default → REMOTE_ADDR returned
+        $this->assertSame('192.168.1.1', (new RealIpResolver(new TrustedProxy(['192.168.1.1'])))->getIp());
     }
 
     /**
@@ -178,7 +238,9 @@ class RealIpResolverTest extends TestCase
         $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
         $_SERVER['HTTP_X_FORWARDED_FOR'] = '1.1.1.1, 192.168.1.1';
 
-        $this->assertSame('1.1.1.1', (new RealIpResolver(new TrustedProxy(['192.168.1.1'])))->getIp());
+        $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
+        $resolver->enableXForwardedForHeader();
+        $this->assertSame('1.1.1.1', $resolver->getIp());
     }
 
     /**
@@ -191,22 +253,41 @@ class RealIpResolverTest extends TestCase
         $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
         $_SERVER['HTTP_X_FORWARDED_FOR'] = '9.9.9.9, 1.1.1.1, 192.168.1.1';
 
-        $this->assertSame('1.1.1.1', (new RealIpResolver(new TrustedProxy(['192.168.1.1'])))->getIp());
+        $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
+        $resolver->enableXForwardedForHeader();
+        $this->assertSame('1.1.1.1', $resolver->getIp());
     }
 
     // -------------------------------------------------------------------------
-    // RFC 7239 Forwarded header
+    // RFC 7239 Forwarded header — opt-in
     // -------------------------------------------------------------------------
 
     /**
-     * RFC 7239 for= directive is parsed correctly.
+     * Forwarded header is ignored by default; resolver falls through to XFF when enabled.
+     */
+    public function testRfc7239DisabledByDefault(): void
+    {
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
+        $_SERVER['HTTP_FORWARDED'] = 'for=1.1.1.1';
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = '8.8.8.8';
+
+        $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
+        $resolver->enableXForwardedForHeader();
+        // Forwarded disabled → falls through to XFF
+        $this->assertSame('8.8.8.8', $resolver->getIp());
+    }
+
+    /**
+     * RFC 7239 for= directive is parsed correctly when enabled.
      */
     public function testRfc7239ForwardedHeader(): void
     {
         $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
         $_SERVER['HTTP_FORWARDED'] = 'for=1.1.1.1;proto=https';
 
-        $this->assertSame('1.1.1.1', (new RealIpResolver(new TrustedProxy(['192.168.1.1'])))->getIp());
+        $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
+        $resolver->enableRFC7239();
+        $this->assertSame('1.1.1.1', $resolver->getIp());
     }
 
     /**
@@ -215,24 +296,97 @@ class RealIpResolverTest extends TestCase
     public function testRfc7239IPv6(): void
     {
         $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
-        // 2606:4700::1 is a publicly routable Cloudflare IPv6 address
         $_SERVER['HTTP_FORWARDED'] = 'for="[2606:4700::1]"';
 
-        $this->assertSame('2606:4700::1', (new RealIpResolver(new TrustedProxy(['192.168.1.1'])))->getIp());
+        $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
+        $resolver->enableRFC7239();
+        $this->assertSame('2606:4700::1', $resolver->getIp());
     }
 
     /**
-     * Disabling RFC 7239 causes the resolver to skip the Forwarded header.
+     * RFC 7239 chain is traversed right-to-left, skipping trusted proxies.
      */
-    public function testDisableRfc7239(): void
+    public function testRfc7239ChainRightToLeft(): void
     {
         $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
-        $_SERVER['HTTP_FORWARDED'] = 'for=1.1.1.1';
-        $_SERVER['HTTP_X_REAL_IP'] = '8.8.8.8';
+        // chain order: client → proxy1 → proxy2 (= REMOTE_ADDR)
+        $_SERVER['HTTP_FORWARDED'] = 'for=1.1.1.1, for=192.168.1.2, for=192.168.1.1';
+
+        $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1', '192.168.1.2']));
+        $resolver->enableRFC7239();
+        // Right-to-left: skip 192.168.1.1 (trusted), skip 192.168.1.2 (trusted), return 1.1.1.1
+        $this->assertSame('1.1.1.1', $resolver->getIp());
+    }
+
+    /**
+     * RFC 7239 IPv4 node with port is normalized correctly.
+     */
+    public function testRfc7239WithIPv4Port(): void
+    {
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
+        $_SERVER['HTTP_FORWARDED'] = 'for=1.1.1.1:54321';
 
         $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
-        $resolver->disableRFC7239();
+        $resolver->enableRFC7239();
+        $this->assertSame('1.1.1.1', $resolver->getIp());
+    }
 
+    /**
+     * RFC 7239 IPv6 node with port is normalized correctly.
+     */
+    public function testRfc7239WithIPv6Port(): void
+    {
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
+        $_SERVER['HTTP_FORWARDED'] = 'for="[2606:4700::1]:4711"';
+
+        $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
+        $resolver->enableRFC7239();
+        $this->assertSame('2606:4700::1', $resolver->getIp());
+    }
+
+    /**
+     * RFC 7239 IPv6 node with invalid suffix after ] is rejected.
+     */
+    public function testRfc7239IPv6InvalidSuffixRejected(): void
+    {
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
+        $_SERVER['HTTP_FORWARDED'] = 'for="[2606:4700::1]garbage"';
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = '8.8.8.8';
+
+        $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
+        $resolver->enableRFC7239();
+        $resolver->enableXForwardedForHeader();
+        // Malformed node discarded → falls through to XFF
+        $this->assertSame('8.8.8.8', $resolver->getIp());
+    }
+
+    /**
+     * RFC 7239 port out of range 1–65535 is rejected.
+     */
+    public function testRfc7239PortOutOfRangeRejected(): void
+    {
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
+        $_SERVER['HTTP_FORWARDED'] = 'for="[2606:4700::1]:99999"';
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = '8.8.8.8';
+
+        $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
+        $resolver->enableRFC7239();
+        $resolver->enableXForwardedForHeader();
+        $this->assertSame('8.8.8.8', $resolver->getIp());
+    }
+
+    /**
+     * RFC 7239 port with leading zeros is rejected.
+     */
+    public function testRfc7239PortLeadingZerosRejected(): void
+    {
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
+        $_SERVER['HTTP_FORWARDED'] = 'for=1.1.1.1:00080';
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = '8.8.8.8';
+
+        $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
+        $resolver->enableRFC7239();
+        $resolver->enableXForwardedForHeader();
         $this->assertSame('8.8.8.8', $resolver->getIp());
     }
 
@@ -248,7 +402,9 @@ class RealIpResolverTest extends TestCase
         $_SERVER['REMOTE_ADDR'] = '192.168.1.1';
         $_SERVER['HTTP_X_FORWARDED_FOR'] = '10.0.0.5';
 
-        $this->assertSame('192.168.1.1', (new RealIpResolver(new TrustedProxy(['192.168.1.1'])))->getIp());
+        $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
+        $resolver->enableXForwardedForHeader();
+        $this->assertSame('192.168.1.1', $resolver->getIp());
     }
 
     /**
@@ -260,8 +416,8 @@ class RealIpResolverTest extends TestCase
         $_SERVER['HTTP_X_FORWARDED_FOR'] = '10.0.0.5';
 
         $resolver = new RealIpResolver(new TrustedProxy(['192.168.1.1']));
+        $resolver->enableXForwardedForHeader();
         $resolver->disablePrivateReservedFilter();
-
         $this->assertSame('10.0.0.5', $resolver->getIp());
     }
 

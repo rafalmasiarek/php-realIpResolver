@@ -10,15 +10,25 @@ use rafalmasiarek\RealIpResolver\TrustedProxyInterface;
  * Resolves the real client IP address, protected against header spoofing.
  *
  * When no trusted proxy is configured, or when REMOTE_ADDR is not a trusted proxy,
- * all forwarding headers are ignored and REMOTE_ADDR is returned directly — this
- * fully prevents spoofing via X-Forwarded-For or similar headers.
+ * all forwarding headers are ignored and REMOTE_ADDR is returned directly.
  *
- * When REMOTE_ADDR belongs to a trusted proxy, the real IP is resolved from headers
- * in the following priority order:
- *   1. CF-Connecting-IP (Cloudflare)
- *   2. Forwarded: for= (RFC 7239)
- *   3. X-Real-IP (Nginx)
- *   4. X-Forwarded-For, traversed right-to-left (first non-proxy public IP)
+ * When REMOTE_ADDR belongs to a trusted proxy, additional headers can be trusted
+ * via explicit opt-in. All forwarding headers are disabled by default and must
+ * be enabled individually:
+ *
+ *   enableCloudflareHeader()    → CF-Connecting-IP
+ *   enableRFC7239()             → Forwarded: for= (RFC 7239), right-to-left chain
+ *   enableXRealIpHeader()       → X-Real-IP
+ *   enableXForwardedForHeader() → X-Forwarded-For, right-to-left chain
+ *
+ * Headers are evaluated in priority order:
+ *   1. CF-Connecting-IP     (opt-in)
+ *   2. Forwarded: for=      (opt-in, right-to-left)
+ *   3. X-Real-IP            (opt-in)
+ *   4. X-Forwarded-For      (opt-in, right-to-left)
+ *
+ * Enabling a header is safe only when the trusted proxy is known to set or
+ * sanitize that header — the library cannot enforce this at the network level.
  *
  * @package rafalmasiarek
  */
@@ -39,11 +49,32 @@ class RealIpResolver
     private bool $filterPrivateReserved = true;
 
     /**
-     * Whether to parse the RFC 7239 Forwarded header.
+     * Whether to trust the CF-Connecting-IP header set by Cloudflare.
      *
      * @var bool
      */
-    private bool $enableRFC7239 = true;
+    private bool $trustCloudflareHeader = false;
+
+    /**
+     * Whether to trust the RFC 7239 Forwarded header.
+     *
+     * @var bool
+     */
+    private bool $trustForwardedHeader = false;
+
+    /**
+     * Whether to trust the X-Real-IP header set by Nginx.
+     *
+     * @var bool
+     */
+    private bool $trustXRealIpHeader = false;
+
+    /**
+     * Whether to trust the X-Forwarded-For header.
+     *
+     * @var bool
+     */
+    private bool $trustXForwardedForHeader = false;
 
     /**
      * @param TrustedProxyInterface|null $trustedProxy Optional trusted proxy handler.
@@ -64,13 +95,55 @@ class RealIpResolver
     }
 
     /**
-     * Disable parsing of the RFC 7239 Forwarded header.
+     * Enable trusting the CF-Connecting-IP header set by Cloudflare.
+     *
+     * Safe only when the trusted proxy list consists exclusively of Cloudflare
+     * edge IPs, or when the infrastructure sanitizes this header for all
+     * non-Cloudflare requests.
      *
      * @return void
      */
-    public function disableRFC7239(): void
+    public function enableCloudflareHeader(): void
     {
-        $this->enableRFC7239 = false;
+        $this->trustCloudflareHeader = true;
+    }
+
+    /**
+     * Enable parsing of the RFC 7239 Forwarded header.
+     *
+     * Safe only when the trusted proxy is known to set or sanitize this header.
+     *
+     * @return void
+     */
+    public function enableRFC7239(): void
+    {
+        $this->trustForwardedHeader = true;
+    }
+
+    /**
+     * Enable trusting the X-Real-IP header.
+     *
+     * Safe only when the trusted proxy is known to set or sanitize this header.
+     *
+     * @return void
+     */
+    public function enableXRealIpHeader(): void
+    {
+        $this->trustXRealIpHeader = true;
+    }
+
+    /**
+     * Enable trusting the X-Forwarded-For header.
+     *
+     * Safe only when the trusted proxy appends the client IP to the existing chain
+     * and the infrastructure strips any client-supplied X-Forwarded-For values
+     * before they reach PHP.
+     *
+     * @return void
+     */
+    public function enableXForwardedForHeader(): void
+    {
+        $this->trustXForwardedForHeader = true;
     }
 
     /**
@@ -83,41 +156,41 @@ class RealIpResolver
      */
     public function getIp(): string
     {
-        $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '';
+        $remoteAddr = trim($_SERVER['REMOTE_ADDR'] ?? '');
 
         if ($this->trustedProxy === null || !$this->trustedProxy->isTrusted($remoteAddr)) {
             return $remoteAddr;
         }
 
-        // 1. CF-Connecting-IP (Cloudflare sets the real client IP in this header)
-        if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
+        // 1. CF-Connecting-IP — opt-in
+        if ($this->trustCloudflareHeader && !empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
             $ip = trim($_SERVER['HTTP_CF_CONNECTING_IP']);
-            if ($this->isValidPublicIp($ip)) {
+            if ($this->isValidIp($ip)) {
                 return $ip;
             }
         }
 
-        // 2. RFC 7239 Forwarded header
-        if ($this->enableRFC7239 && !empty($_SERVER['HTTP_FORWARDED'])) {
+        // 2. RFC 7239 Forwarded — opt-in, right-to-left chain
+        if ($this->trustForwardedHeader && !empty($_SERVER['HTTP_FORWARDED'])) {
             $ip = $this->parseRFC7239($_SERVER['HTTP_FORWARDED']);
             if ($ip !== null) {
                 return $ip;
             }
         }
 
-        // 3. X-Real-IP (set by Nginx proxy_set_header X-Real-IP $remote_addr)
-        if (!empty($_SERVER['HTTP_X_REAL_IP'])) {
+        // 3. X-Real-IP — opt-in
+        if ($this->trustXRealIpHeader && !empty($_SERVER['HTTP_X_REAL_IP'])) {
             $ip = trim($_SERVER['HTTP_X_REAL_IP']);
-            if ($this->isValidPublicIp($ip)) {
+            if ($this->isValidIp($ip)) {
                 return $ip;
             }
         }
 
-        // 4. X-Forwarded-For, right-to-left: skip trusted proxies, return first real client IP
-        if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+        // 4. X-Forwarded-For — opt-in, right-to-left, skip trusted proxies
+        if ($this->trustXForwardedForHeader && !empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
             $chain = array_map('trim', explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']));
             foreach (array_reverse($chain) as $ip) {
-                if (!$this->trustedProxy->isTrusted($ip) && $this->isValidPublicIp($ip)) {
+                if (!$this->trustedProxy->isTrusted($ip) && $this->isValidIp($ip)) {
                     return $ip;
                 }
             }
@@ -127,17 +200,19 @@ class RealIpResolver
     }
 
     /**
-     * Parse an RFC 7239 Forwarded header and return the first valid public client IP.
+     * Parse an RFC 7239 Forwarded header and return the real client IP.
      *
-     * Handles:
-     *   Forwarded: for=192.0.2.43;proto=http
-     *   Forwarded: for="[2001:db8::1]"
+     * Collects all for= node values in chain order, then traverses them
+     * right-to-left, skipping trusted proxy IPs — consistent with the
+     * X-Forwarded-For security model.
      *
      * @param string $header Raw Forwarded header value.
      * @return string|null Extracted IP, or null when none is valid.
      */
     private function parseRFC7239(string $header): ?string
     {
+        $ips = [];
+
         foreach (explode(',', $header) as $entry) {
             foreach (explode(';', trim($entry)) as $directive) {
                 $directive = trim($directive);
@@ -147,18 +222,99 @@ class RealIpResolver
                 }
 
                 $value = trim(substr($directive, 4), " \t\n\r\0\x0B\"'");
+                $ip    = $this->normalizeRFC7239Node($value);
 
-                if (str_starts_with($value, '[') && str_ends_with($value, ']')) {
-                    $value = substr($value, 1, -1);
+                if ($ip !== null) {
+                    $ips[] = $ip;
                 }
 
-                if ($this->isValidPublicIp($value)) {
-                    return $value;
-                }
+                break;
+            }
+        }
+
+        foreach (array_reverse($ips) as $ip) {
+            if (!$this->trustedProxy->isTrusted($ip) && $this->isValidIp($ip)) {
+                return $ip;
             }
         }
 
         return null;
+    }
+
+    /**
+     * Normalize an RFC 7239 node identifier to a plain IP address string.
+     *
+     * Handles the following node forms per RFC 7239 §6:
+     *   192.0.2.60              plain IPv4
+     *   192.0.2.60:47011        IPv4 with port
+     *   [2001:db8::1]           IPv6 literal
+     *   [2001:db8::1]:4711      IPv6 literal with port
+     *   unknown / _token        returns null (not an IP)
+     *
+     * Ports are validated to be in range 1–65535 with no leading zeros.
+     *
+     * @param string $value Raw node value extracted from a for= directive.
+     * @return string|null Plain IP address, or null when the node is not a valid IP.
+     */
+    private function normalizeRFC7239Node(string $value): ?string
+    {
+        // IPv6 literal: [addr] or [addr]:port
+        if (str_starts_with($value, '[')) {
+            $end = strpos($value, ']');
+            if ($end === false) {
+                return null;
+            }
+
+            $suffix = substr($value, $end + 1);
+            if ($suffix !== '') {
+                if (!preg_match('/^:(\d+)$/', $suffix, $m) || !$this->isValidPort($m[1])) {
+                    return null;
+                }
+            }
+
+            return substr($value, 1, $end - 1);
+        }
+
+        // Plain IPv4 or IPv6 without port
+        if (filter_var($value, FILTER_VALIDATE_IP) !== false) {
+            return $value;
+        }
+
+        // IPv4 with port: 192.0.2.60:47011
+        if (substr_count($value, ':') === 1) {
+            [$host, $port] = explode(':', $value, 2);
+            if (
+                filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false &&
+                $this->isValidPort($port)
+            ) {
+                return $host;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Validate a port string per RFC 7239 / HTTP syntax.
+     *
+     * Rejects values outside 1–65535 and strings with leading zeros.
+     *
+     * @param string $port Raw port string from a node identifier.
+     * @return bool True when the port is a valid HTTP port number.
+     */
+    private function isValidPort(string $port): bool
+    {
+        if ($port === '' || !ctype_digit($port)) {
+            return false;
+        }
+
+        if (strlen($port) > 1 && $port[0] === '0') {
+            return false;
+        }
+
+        $n = (int) $port;
+
+        return $n >= 1 && $n <= 65535;
     }
 
     /**
@@ -167,7 +323,7 @@ class RealIpResolver
      * @param string $ip IP address to validate.
      * @return bool True when the IP is valid and (if filtering is on) publicly routable.
      */
-    private function isValidPublicIp(string $ip): bool
+    private function isValidIp(string $ip): bool
     {
         $options = $this->filterPrivateReserved
             ? ['flags' => FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE]
