@@ -100,7 +100,7 @@ When REMOTE_ADDR is trusted, headers are evaluated in this order (first match wi
 
 **`enableXRealIpHeader()`** — safe when Nginx is configured with `proxy_set_header X-Real-IP $remote_addr` and strips any client-supplied `X-Real-IP` header.
 
-**`enableXForwardedForHeader()`** — safe when the trusted proxy appends the client IP to the chain (`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` in Nginx) and your infrastructure strips any client-supplied `X-Forwarded-For` values before they reach PHP.
+**`enableXForwardedForHeader()`** — safe when the trusted proxy appends the connecting client's IP to the right end of the chain (`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` in Nginx). Right-to-left traversal skips trusted proxy entries and stops at the first non-trusted IP — client-injected values appear to the left of the real client IP and are never returned.
 
 In all cases: enable only headers that your proxy is known to set or sanitize. When in doubt, leave the header disabled.
 
