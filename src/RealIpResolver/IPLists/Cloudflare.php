@@ -75,9 +75,10 @@ class Cloudflare implements IpListInterface
      *
      * @param string|null $path Cache file to write instead of the configured default.
      * @throws \RuntimeException When both the IPv4 and IPv6 endpoints are unreachable.
-     * @return void
+     * @return bool True when the file was written (new or changed), false when the
+     *              downloaded list was identical to what was already on disk.
      */
-    public static function updateList(?string $path = null): void
+    public static function updateList(?string $path = null): bool
     {
         $ips4 = @file_get_contents('https://www.cloudflare.com/ips-v4');
         $ips6 = @file_get_contents('https://www.cloudflare.com/ips-v6');
@@ -95,7 +96,7 @@ class Cloudflare implements IpListInterface
         $file = $path ?? self::$file;
 
         if (file_exists($file) && file_get_contents($file) === $contents) {
-            return;
+            return false;
         }
 
         $dir = dirname($file);
@@ -108,6 +109,8 @@ class Cloudflare implements IpListInterface
         if ($path === null) {
             self::$cache = null;
         }
+
+        return true;
     }
 
     /**
