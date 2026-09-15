@@ -34,31 +34,50 @@ class Cloudflare implements IpListInterface
     /**
      * Return the list of Cloudflare CIDR ranges from the local cache file.
      *
+     * When $path is given, it is read instead of the configured file and the
+     * in-memory cache is bypassed entirely — the cache only ever holds the
+     * default file's content, so a per-call path would otherwise return
+     * another call's cached result.
+     *
+     * @param string|null $path Cache file to read instead of the configured default.
      * @return string[]
      */
-    public static function get(): array
+    public static function get(?string $path = null): array
     {
-        if (self::$cache !== null) {
+        $file = $path ?? self::$file;
+
+        if ($path === null && self::$cache !== null) {
             return self::$cache;
         }
 
-        if (!file_exists(self::$file)) {
+        if (!file_exists($file)) {
             return [];
         }
 
-        $lines = file(self::$file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        self::$cache = array_values(array_filter(array_map('trim', $lines !== false ? $lines : [])));
+        $lines  = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        $result = array_values(array_filter(array_map('trim', $lines !== false ? $lines : [])));
 
-        return self::$cache;
+        if ($path === null) {
+            self::$cache = $result;
+        }
+
+        return $result;
     }
 
     /**
      * Download fresh Cloudflare IP ranges from official endpoints and overwrite the local cache file.
      *
+     * The file is left untouched when the downloaded list is identical to what
+     * is already on disk, so its mtime only changes on an actual update. When
+     * $path is given, it is written instead of the configured file; the
+     * in-memory cache — which only ever reflects the default file — is reset
+     * only when writing to that default.
+     *
+     * @param string|null $path Cache file to write instead of the configured default.
      * @throws \RuntimeException When both the IPv4 and IPv6 endpoints are unreachable.
      * @return void
      */
-    public static function updateList(): void
+    public static function updateList(?string $path = null): void
     {
         $ips4 = @file_get_contents('https://www.cloudflare.com/ips-v4');
         $ips6 = @file_get_contents('https://www.cloudflare.com/ips-v6');
@@ -71,14 +90,24 @@ class Cloudflare implements IpListInterface
             $ips4 !== false ? explode("\n", $ips4) : [],
             $ips6 !== false ? explode("\n", $ips6) : [],
         ))));
+        $contents = implode("\n", $all);
 
-        $dir = dirname(self::$file);
+        $file = $path ?? self::$file;
+
+        if (file_exists($file) && file_get_contents($file) === $contents) {
+            return;
+        }
+
+        $dir = dirname($file);
         if (!is_dir($dir)) {
             mkdir($dir, 0755, true);
         }
 
-        file_put_contents(self::$file, implode("\n", $all));
-        self::$cache = null;
+        file_put_contents($file, $contents);
+
+        if ($path === null) {
+            self::$cache = null;
+        }
     }
 
     /**

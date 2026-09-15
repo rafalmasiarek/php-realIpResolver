@@ -120,11 +120,20 @@ Cloudflare::updateList();
 
 A GitHub Actions workflow (`update-cloudflare.yml`) is included to refresh the list automatically on the 1st of each month.
 
-If the package install directory does not persist across deploys (e.g. `composer install` rebuilding `vendor/` on every release), relocate the cache file to an application-managed, persistent storage path before calling `get()` or `updateList()`:
+If the package install directory does not persist across deploys (e.g. `composer install` rebuilding `vendor/` on every release), pass an application-managed, persistent path directly to `get()` and `updateList()`:
 
 ```php
 use rafalmasiarek\RealIpResolver\IPLists\Cloudflare;
 
+$path = '/var/www/storage/realip/cloudflare.txt';
+
+$ips = Cloudflare::get($path);
+Cloudflare::updateList($path); // no-op if the downloaded list is unchanged
+```
+
+To change the default path once for every call site instead of passing it each time, use `setFile()`:
+
+```php
 Cloudflare::setFile('/var/www/storage/realip/cloudflare.txt');
 
 $ips = Cloudflare::get();
