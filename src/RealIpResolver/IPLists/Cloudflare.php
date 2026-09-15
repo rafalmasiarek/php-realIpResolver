@@ -9,7 +9,9 @@ namespace rafalmasiarek\RealIpResolver\IPLists;
  *
  * Ranges are read from a local cache file and can be refreshed from Cloudflare's
  * official IP list endpoints. An import() method allows overriding the list
- * in-memory, which is useful in tests.
+ * in-memory, which is useful in tests. setFile() allows relocating the cache
+ * file, which is useful for applications where the package install directory
+ * does not persist across deploys.
  *
  * @package rafalmasiarek\RealIpResolver\IPLists
  */
@@ -23,7 +25,7 @@ class Cloudflare implements IpListInterface
     private static ?array $cache = null;
 
     /**
-     * Absolute path to the local IP list cache file.
+     * Absolute path to the local IP list cache file. Override via setFile().
      *
      * @var string
      */
@@ -90,5 +92,22 @@ class Cloudflare implements IpListInterface
     public static function import(array $ips): void
     {
         self::$cache = array_values(array_filter(array_map('trim', $ips)));
+    }
+
+    /**
+     * Relocate the local cache file used by get() and updateList().
+     *
+     * Useful when the package install directory does not persist across
+     * deploys (e.g. a `composer install` that rebuilds vendor/ on every
+     * release), so the cache should live under an application-managed,
+     * persistent storage path instead.
+     *
+     * @param string $path Absolute path to the cache file.
+     * @return void
+     */
+    public static function setFile(string $path): void
+    {
+        self::$file = $path;
+        self::$cache = null;
     }
 }

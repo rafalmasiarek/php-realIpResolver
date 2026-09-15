@@ -120,6 +120,16 @@ Cloudflare::updateList();
 
 A GitHub Actions workflow (`update-cloudflare.yml`) is included to refresh the list automatically on the 1st of each month.
 
+If the package install directory does not persist across deploys (e.g. `composer install` rebuilding `vendor/` on every release), relocate the cache file to an application-managed, persistent storage path before calling `get()` or `updateList()`:
+
+```php
+use rafalmasiarek\RealIpResolver\IPLists\Cloudflare;
+
+Cloudflare::setFile('/var/www/storage/realip/cloudflare.txt');
+
+$ips = Cloudflare::get();
+```
+
 ### Localhost
 
 ```php
