@@ -6,7 +6,7 @@ context:
   - |
     A lightweight PHP library to resolve the **real client IP address** behind proxies and load balancers, hardened against header spoofing.
 
-includes:
+footer_includes:
   - docs/usage.md
   - docs/security.md
   - docs/migration.md
